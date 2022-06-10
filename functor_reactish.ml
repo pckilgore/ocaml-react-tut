@@ -42,7 +42,7 @@ let () = Display.render ()
 
 type _ component =
   | String : string -> _ component
-  | Component : 'props node -> 'props node component
+  | Component : 'props 'otherprops. 'props node -> 'otherprops component
 
 and 'props node =
   { make_fn : 'props -> 'props component
@@ -50,12 +50,16 @@ and 'props node =
   ; children : 'props. 'props component list
   }
 
+module Fragment = struct
+  let make () = String ""
+end
+
 module Box = struct
   type props = { name : string }
 
   let make props =
     let new_name = props.name ^ " in box" in
-    String new_name
+    Component { make_fn = Fragment.make; props = (); children = [ String new_name ] }
   ;;
 end
 
