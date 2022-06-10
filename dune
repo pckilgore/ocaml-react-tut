@@ -1,0 +1,3 @@
+(executable 
+  (name functor_reactish)
+  (libraries base stdio))
