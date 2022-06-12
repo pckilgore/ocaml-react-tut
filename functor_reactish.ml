@@ -47,6 +47,7 @@ module Redux = struct
 
     val register : unit -> id
     val compare : id -> id -> int
+    val id_to_string : id -> string
   end = struct
     type id = int
     type t = id
@@ -58,6 +59,8 @@ module Redux = struct
       incr subscriber_ids;
       !subscriber_ids
     ;;
+
+    let id_to_string id = Int.to_string id
   end
 
   module type Behavior = sig
@@ -67,6 +70,13 @@ module Redux = struct
     val reducer : state -> action -> state
     val initial_state : state
   end
+
+  type ('state, 'action) reducer = 'state -> 'action -> 'state
+
+  (* Helper to create a single reducer from many *)
+  let combine_reducers reducers state action =
+    List.fold_left (fun state reducer -> reducer state action) state reducers
+  ;;
 
   module type Store = sig
     type action
@@ -106,9 +116,9 @@ module Redux = struct
     ;;
 
     let dispatch action =
-      let state = !state in
-      let next_state = M.reducer state action in
+      let next_state = M.reducer !state action in
       Subscriber_map.iter (fun _ v -> v next_state) !subscribers;
+      state := next_state;
       next_state
     ;;
   end
@@ -151,3 +161,113 @@ let rec string_renderer : type a. a component -> string = function
 ;;
 
 let () = App.make () |> string_renderer |> Stdio.print_endline
+
+module DebugState = struct
+  type state = bool
+
+  type action =
+    [ `On
+    | `Off
+    ]
+
+  let initial_state = false
+
+  let reducer state = function
+    | `On -> true
+    | `Off -> false
+    | _ -> state
+  ;;
+
+  let to_string state = string_of_bool state
+end
+
+module UserState = struct
+  type occupation =
+    | Programmer
+    | Lawyer
+
+  type state =
+    { name : string
+    ; age : int
+    ; occupation : occupation
+    }
+
+  type action =
+    [ `UpdateName of string
+    | `UpdateAge of int
+    | `Reset of state
+    ]
+
+  let initial_state = { name = "Patrick"; age = 35; occupation = Lawyer }
+
+  let reducer state = function
+    | `UpdateAge age -> { state with age }
+    | `UpdateName name -> { state with name }
+    | `Reset state -> state
+    | _ -> state
+  ;;
+
+  let string_of_occupation = function
+    | Lawyer -> "Lawyer"
+    | Programmer -> "Programmer"
+  ;;
+
+  let to_string state =
+    Printf.sprintf
+      "{ name = %s ; age = %d ; occupation = %s }\n"
+      state.name
+      state.age
+      (string_of_occupation state.occupation)
+  ;;
+end
+
+module State = struct
+  type state =
+    { user_state : UserState.state
+    ; debug_state : DebugState.state
+    }
+
+  type action =
+    [ UserState.action
+    | DebugState.action
+    ]
+
+  let reducer state action =
+    { user_state = UserState.reducer state.user_state action
+    ; debug_state = DebugState.reducer state.debug_state action
+    }
+  ;;
+
+  let initial_state =
+    { user_state = UserState.initial_state; debug_state = DebugState.initial_state }
+  ;;
+
+  let to_string state =
+    Printf.printf
+      "{\n\tuser_state = %s\tdebug_state = %s\n}\n"
+      (UserState.to_string state.user_state)
+      (DebugState.to_string state.debug_state)
+  ;;
+end
+
+module Store = Redux.Make_store (State)
+
+let () =
+  let logger_id = Store.subscribe State.to_string in
+  Stdio.print_endline "Starting";
+  Store.get_state () |> State.to_string;
+  Stdio.print_endline "Updating...";
+  let _ = Store.dispatch (`UpdateAge 25) in
+  Stdio.print_endline "Updating...";
+  let _ = Store.dispatch (`UpdateName "Bobert") in
+  Stdio.print_endline "Reset";
+  let _ = Store.dispatch (`Reset UserState.initial_state) in
+  Stdio.print_endline "Unsubscribed...";
+  let _ = Store.unsubscribe logger_id in
+  Stdio.print_endline "Updating...";
+  let _ = Store.dispatch (`UpdateName "Bobert2") in
+  Stdio.print_endline "Updating...";
+  let _ = Store.dispatch (`UpdateName "Bobert3") in
+  Stdio.print_endline "printing";
+  Store.get_state () |> State.to_string
+;;
