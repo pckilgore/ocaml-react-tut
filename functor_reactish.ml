@@ -73,25 +73,35 @@ module Redux = struct
 
   type ('state, 'action) reducer = 'state -> 'action -> 'state
 
-  (* Helper to create a single reducer from many *)
-  let combine_reducers reducers state action =
-    List.fold_left (fun state reducer -> reducer state action) state reducers
-  ;;
-
   module type Store = sig
     type action
     type state
+    type state_getter = unit -> state
 
-    val get_state : unit -> state
+    val get_state : state_getter
     val subscribe : (state -> unit) -> Subscriber.id
     val unsubscribe : Subscriber.id -> bool
-    val dispatch : action -> state
+
+    type dispatcher = operation -> state
+
+    and operation =
+      | Action of action
+      | Thunk of (dispatch:dispatcher -> get_state:state_getter -> state)
+
+    val dispatch : dispatcher
   end
 
   module Make_store (M : Behavior) :
     Store with type state = M.state and type action = M.action = struct
     type state = M.state
     type action = M.action
+    type state_getter = unit -> state
+
+    type dispatcher = operation -> state
+
+    and operation =
+      | Action of action
+      | Thunk of (dispatch:dispatcher -> get_state:state_getter -> state)
 
     let state = ref M.initial_state
     let get_state () = !state
@@ -115,13 +125,22 @@ module Redux = struct
       | None -> false
     ;;
 
-    let dispatch action =
-      let next_state = M.reducer !state action in
-      Subscriber_map.iter (fun _ v -> v next_state) !subscribers;
+    let rec reduce_with_thunks = function
+      | Action action -> M.reducer !state action
+      | Thunk thunk -> thunk ~get_state ~dispatch:reduce_with_thunks
+    ;;
+
+    let dispatch operation =
+      let next_state = reduce_with_thunks operation in
       state := next_state;
+      Subscriber_map.iter (fun _ sub -> sub next_state) !subscribers;
       next_state
     ;;
   end
+
+  (* Maybe with a GDAT? *)
+  (*module type Split_store = sig*)
+  (*end*)
 end
 
 type _ component =
@@ -243,7 +262,7 @@ module State = struct
   ;;
 
   let to_string state =
-    Printf.printf
+    Printf.sprintf
       "{\n\tuser_state = %s\tdebug_state = %s\n}\n"
       (UserState.to_string state.user_state)
       (DebugState.to_string state.debug_state)
@@ -253,21 +272,14 @@ end
 module Store = Redux.Make_store (State)
 
 let () =
-  let logger_id = Store.subscribe State.to_string in
+  let _ =
+    Store.subscribe (fun state -> state |> State.to_string |> Stdio.print_endline)
+  in
   Stdio.print_endline "Starting";
-  Store.get_state () |> State.to_string;
+  Store.get_state () |> State.to_string |> Stdio.print_endline;
   Stdio.print_endline "Updating...";
-  let _ = Store.dispatch (`UpdateAge 25) in
-  Stdio.print_endline "Updating...";
-  let _ = Store.dispatch (`UpdateName "Bobert") in
-  Stdio.print_endline "Reset";
-  let _ = Store.dispatch (`Reset UserState.initial_state) in
-  Stdio.print_endline "Unsubscribed...";
-  let _ = Store.unsubscribe logger_id in
-  Stdio.print_endline "Updating...";
-  let _ = Store.dispatch (`UpdateName "Bobert2") in
-  Stdio.print_endline "Updating...";
-  let _ = Store.dispatch (`UpdateName "Bobert3") in
+  let lazy_age_update ~dispatch ~get_state:_ = dispatch (Store.Action (`UpdateAge 99)) in
+  let _ = Store.dispatch (Thunk lazy_age_update) in
   Stdio.print_endline "printing";
-  Store.get_state () |> State.to_string
+  Store.get_state () |> State.to_string |> Stdio.print_endline
 ;;
