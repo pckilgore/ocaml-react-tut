@@ -40,6 +40,80 @@ module Display = Make_component (App)
 let () = Display.render ()
 *)
 
+module Redux = struct
+  module Subscriber : sig
+    type id
+    type t = id
+
+    val register : unit -> id
+    val compare : id -> id -> int
+  end = struct
+    type id = int
+    type t = id
+
+    let compare = Int.compare
+    let subscriber_ids = ref 0
+
+    let register () =
+      incr subscriber_ids;
+      !subscriber_ids
+    ;;
+  end
+
+  module type Behavior = sig
+    type action
+    type state
+
+    val reducer : state -> action -> state
+    val initial_state : state
+  end
+
+  module type Store = sig
+    type action
+    type state
+
+    val get_state : unit -> state
+    val subscribe : (state -> unit) -> Subscriber.id
+    val unsubscribe : Subscriber.id -> bool
+    val dispatch : action -> state
+  end
+
+  module Make_store (M : Behavior) :
+    Store with type state = M.state and type action = M.action = struct
+    type state = M.state
+    type action = M.action
+
+    let state = ref M.initial_state
+    let get_state () = !state
+
+    module Subscriber_map = Map.Make (Subscriber)
+
+    let subscribers = ref Subscriber_map.empty
+
+    let subscribe t =
+      let id = Subscriber.register () in
+      subscribers := Subscriber_map.add id t !subscribers;
+      id
+    ;;
+
+    let unsubscribe id =
+      let subs = !subscribers in
+      match Subscriber_map.find_opt id subs with
+      | Some _ ->
+        subscribers := Subscriber_map.remove id subs;
+        true
+      | None -> false
+    ;;
+
+    let dispatch action =
+      let state = !state in
+      let next_state = M.reducer state action in
+      Subscriber_map.iter (fun _ v -> v next_state) !subscribers;
+      next_state
+    ;;
+  end
+end
+
 type _ component =
   | String : string -> _ component
   | Component : 'props 'otherprops. 'props node -> 'otherprops component
