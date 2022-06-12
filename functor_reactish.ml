@@ -69,6 +69,7 @@ module Redux = struct
 
     val reducer : state -> action -> state
     val initial_state : state
+    val to_string : state -> string
   end
 
   type ('state, 'action) reducer = 'state -> 'action -> 'state
@@ -82,11 +83,12 @@ module Redux = struct
     val subscribe : (state -> unit) -> Subscriber.id
     val unsubscribe : Subscriber.id -> bool
 
-    type dispatcher = operation -> state
+    type dispatcher = operation -> unit
+    and thunk = dispatch:dispatcher -> get_state:state_getter -> unit
 
     and operation =
       | Action of action
-      | Thunk of (dispatch:dispatcher -> get_state:state_getter -> state)
+      | Thunk of thunk
 
     val dispatch : dispatcher
   end
@@ -97,11 +99,12 @@ module Redux = struct
     type action = M.action
     type state_getter = unit -> state
 
-    type dispatcher = operation -> state
+    type dispatcher = operation -> unit
+    and thunk = dispatch:dispatcher -> get_state:state_getter -> unit
 
     and operation =
       | Action of action
-      | Thunk of (dispatch:dispatcher -> get_state:state_getter -> state)
+      | Thunk of thunk
 
     let state = ref M.initial_state
     let get_state () = !state
@@ -125,16 +128,23 @@ module Redux = struct
       | None -> false
     ;;
 
-    let rec reduce_with_thunks = function
-      | Action action -> M.reducer !state action
-      | Thunk thunk -> thunk ~get_state ~dispatch:reduce_with_thunks
-    ;;
+    let rec reduce_with_thunks state = function
+      | Action action ->
+        Stdio.print_endline "an action";
+        M.reducer state action
+      | Thunk thunk ->
+        Stdio.print_endline "a thunk";
+        let () = thunk ~get_state ~dispatch in
+        state
 
-    let dispatch operation =
-      let next_state = reduce_with_thunks operation in
+    and dispatch operation =
+      Stdio.print_endline "Got Update";
+      let prev_state = !state in
+      Stdio.print_endline ("Got state " ^ M.to_string prev_state);
+      let next_state = reduce_with_thunks prev_state operation in
+      Stdio.print_endline ("Next state is state " ^ M.to_string next_state);
       state := next_state;
-      Subscriber_map.iter (fun _ sub -> sub next_state) !subscribers;
-      next_state
+      Subscriber_map.iter (fun _ sub -> sub next_state) !subscribers
     ;;
   end
 
@@ -277,9 +287,20 @@ let () =
   in
   Stdio.print_endline "Starting";
   Store.get_state () |> State.to_string |> Stdio.print_endline;
-  Stdio.print_endline "Updating...";
-  let lazy_age_update ~dispatch ~get_state:_ = dispatch (Store.Action (`UpdateAge 99)) in
+  let lazy_age_update ~dispatch ~get_state:_ =
+    ignore
+      (Lwt.bind (Lwt_unix.sleep 2.) (fun _ ->
+           Random.self_init ();
+           if Random.float 1. > 0.5
+           then (
+             let () = dispatch (Store.Action (`UpdateAge 100)) in
+             Lwt.return_unit)
+           else (
+             let () = dispatch (Store.Action (`UpdateAge 1)) in
+             Lwt.return_unit)))
+  in
   let _ = Store.dispatch (Thunk lazy_age_update) in
-  Stdio.print_endline "printing";
-  Store.get_state () |> State.to_string |> Stdio.print_endline
+  let _ = Store.dispatch (Action (`UpdateName "fart")) in
+  let () = Lwt_main.run (Lwt_unix.sleep 10.) in
+  ()
 ;;

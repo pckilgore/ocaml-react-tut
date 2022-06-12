@@ -1,6 +1,6 @@
 (executable 
   (name functor_reactish)
-  (libraries base stdio))
+  (libraries stdio lwt lwt.unix))
 
  (env
    (dev
